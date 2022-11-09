@@ -1,0 +1,166 @@
+---
+title: "Final_Regression_Models"
+output:
+  html_document:
+    df_print: paged
+---
+
+Load packages and read-in phenotypes and all relevant files from previous scripts, merging the datasets and limiting sample to individuals with Sequencing or Genotyping data
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(logistf)
+library(fmsb)
+
+pheno = read.table("./../output/MasterSet.txt", head = T)
+cnv_all = read.table("./../output/CNVs_per_person.dat", head = T)
+names(cnv_all)[1] = "ID"
+scores = fread ("./../output/scores.dat")
+T_NT = read.table("./../output/Transmitted_non-transmitted_counts_for_multivariable_regression.tsv", head= T, sep = "\t")
+rare_d = read.table ("./../output/DNV_counts_for_multivariable_regression.tsv", head=T)
+df_list = list (pheno, cnv_all, scores, T_NT, rare_d) 
+final_df = df_list %>% reduce(full_join, by="ID", all=T)
+final_df = subset (final_df, subset = final_df$in_genotyping == 1 |final_df$in_sequencing == 1)
+final_df$D_CNV_LOF[is.na(final_df$D_CNV_LOF)]<-0
+final_df$NT_CNV_LOF[is.na(final_df$NT_CNV_LOF)]<-0
+final_df$T_CNV_LOF[is.na(final_df$T_CNV_LOF)]<-0
+
+```
+
+Run regression models, with only significant components in DDG2P 
+```{r}
+
+
+g1 = logistf (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05  + DDG2P_PTVandMiss_MPC1_CADD_20_gnomAD_filter +
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, firth=TRUE)
+g0 = logistf (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05  + DDG2P_PTVandMiss_MPC1_CADD_20_gnomAD_filter +
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, firth=TRUE)
+
+DD0 = NULL
+for (i in 2:4)
+{
+      BETA = (g1$coefficients[i])
+    UPPER = (g1$ci.upper[i])
+    LOWER = (g1$ci.lower[i])
+    P_VAL = g1$prob[i]
+
+ DD1 = cbind (BETA, UPPER)
+DD1 = cbind (DD1, LOWER)
+DD1 = cbind (DD1, P_VAL)
+  DD0 = rbind (DD0, DD1)
+
+}
+
+  
+g1a = glm(bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05  + DDG2P_PTVandMiss_MPC1_CADD_20_gnomAD_filter +
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+
+g1b = glm(bin_grade ~ 
+IQ_Score_0.05  + DDG2P_PTVandMiss_MPC1_CADD_20_gnomAD_filter +
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+
+g1c = glm(bin_grade ~ 
+EA_Score_0.05  + DDG2P_PTVandMiss_MPC1_CADD_20_gnomAD_filter +
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+
+g1d = glm(bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05  + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+
+VAR_EXP= NULL
+    VAR_EXP[1] <- (NagelkerkeR2(g1a)$R2 - NagelkerkeR2(g1b)$R2) * 100
+    VAR_EXP[2] <- (NagelkerkeR2(g1a)$R2 - NagelkerkeR2(g1c)$R2) * 100
+    VAR_EXP[3] <- (NagelkerkeR2(g1a)$R2 - NagelkerkeR2(g1d)$R2) * 100
+  DD0 = cbind (DD0, VAR_EXP)
+
+DD0  
+```
+
+Include all genetic components with LOFI gene filters (supplement)
+
+#LOFI gnomAD genes
+```{r}
+
+g2 = logistf (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, firth=TRUE)
+g2a = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2b = glm (bin_grade ~ 
+IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2c = glm (bin_grade ~ 
+EA_Score_0.05 + SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2d = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2e = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2f = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05  +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2g = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2h = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2i = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2j = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + D_CNV_LOF + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2k = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + T_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2l = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + NT_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+g2m = glm (bin_grade ~ 
+EA_Score_0.05 + IQ_Score_0.05+ SZ_Score_0.05 + EA_ntPRS_0.05 + IQ_ntPRS_0.05 +  SZ_ntPRS_0.05 + gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter+ gnomAD_LoFi_Missense_CADD_20_MPC1_NT + gnomAD_LoFi_Missense_CADD_20_MPC1_T + D_CNV_LOF + T_CNV_LOF + 
+PC1 + PC2 + PC3 + PC4 + PC5 +PC6 + PC7 + PC8 + PC9+ PC10 + sex, data=final_df, family="binomial")
+
+
+DD00 = NULL
+for (i in 2:13)
+{
+      beta = (g2$coefficients[i])
+    upper_CI = (g2$ci.upper[i])
+    lower_CI = (g2$ci.lower[i])
+    p_val = g2$prob[i]
+    
+DD1 = cbind (beta, upper_CI)
+DD1 = cbind (DD1, lower_CI)
+DD1 = cbind (DD1, p_val)
+
+DD00 = rbind (DD00, DD1)
+}
+
+VAR_EXP=NULL
+VAR_EXP[1] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2b)$R2) * 100
+VAR_EXP[2] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2c)$R2) * 100
+VAR_EXP[3] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2d)$R2) * 100
+VAR_EXP[4] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2e)$R2) * 100
+VAR_EXP[5] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2f)$R2) * 100
+VAR_EXP[6] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2g)$R2) * 100
+VAR_EXP[7] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2h)$R2) * 100
+VAR_EXP[8] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2i)$R2) * 100
+VAR_EXP[9] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2j)$R2) * 100
+VAR_EXP[10] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2k)$R2) * 100
+VAR_EXP[11] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2l)$R2) * 100
+VAR_EXP[12] = (NagelkerkeR2(g2a)$R2 - NagelkerkeR2(g2m)$R2) * 100
+
+  DD00 = cbind (DD00, VAR_EXP)
+DD00
+```
+
+
+
