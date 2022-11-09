@@ -1,0 +1,343 @@
+---
+title: "CNV_Analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+Load CNV and phenotype data
+
+```{r}
+
+library(tidyverse)
+library(data.table)
+library(logistf)
+
+
+#CNV Data 
+
+cv_m=read.table("./../data/CNV_dataset3.txt", head=T, sep="\t")
+cv_m = subset(cv_m, subset=cv_m$Transmission.Status!="")
+
+## phenotype data 
+phenotypes <- read.table("./../output/MasterSet.txt", header = T, sep = " ", quote = "") %>%
+  mutate(bin_grade = ifelse(bin_grade == 1,
+                            0,1)) ## Swap binary coding for CNV analysis
+
+```
+
+Load gene sets
+
+```{r}
+## file locations
+gene_sets_input <- list(
+  DDG2P = "./../data/DDG2P_15_11_2021.txt",
+  LoFi_gnomad = "./../data/gnomad_pLI_Ensemble.tsv"
+)
+
+## load sets into list
+gene_sets <- lapply(gene_sets_input, function(x){
+  temp_set <- read.table(x,
+                         header = T,
+                         sep = "\t",
+                         quote = "")
+  return(temp_set)
+})
+
+
+## create set for monoallelic confirmed/probable DDD genes
+gene_sets$DDG2P <- gene_sets$DDG2P %>%
+  filter((allelic.requirement == "monoallelic") &
+           DDD.category %in% c("confirmed", "probable"))
+```
+
+Annotate CNVs
+
+```{r}
+
+cv2gen = cv_m[,c(1,15)]
+write.table(cv2gen,"./../output/cv2gen.csv", col.names=F, row.names=F, quote=F, sep=",")
+Lines <- fread("./../output/cv2gen.csv", sep = "", head= F)[[1]]
+n <- max(count.fields(textConnection(Lines), sep = ","))
+cv2gen= fread(text = c(toString(1:n), Lines), header = TRUE, fill = TRUE, data.table=F)
+
+cv2gen = as.data.frame(cv2gen)
+
+t1 = NULL
+
+for (i in 1:n){
+  t2 = cv2gen[,i] %in%  gene_sets$DDG2P$gene.symbol
+  
+t1 = cbind(t1, t2)
+}
+t1 = as.data.frame(t1)
+t1<- data.frame(lapply(t1, function(x) {
+                 gsub("FALSE", "0", x)
+              }))
+t1 <- data.frame(lapply(t1, function(x) {
+                 gsub("TRUE", "1", x)
+              }))
+t1<- data.frame(lapply(t1, function(x) as.numeric(as.character(x))))
+t1$DDG2 = rowSums(t1)
+cv_m = cbind (cv_m, t1$DDG2)
+
+
+t3 = NULL
+
+for (i in 1:n){
+  t2 = cv2gen[,i] %in% gene_sets$LoFi_gnomad$gene
+  
+t3 = cbind(t3, t2)
+}
+
+t3 = as.data.frame(t3)
+t3<- data.frame(lapply(t3, function(x) {
+                 gsub("FALSE", "0", x)
+              }))
+t3 <- data.frame(lapply(t3, function(x) {
+                 gsub("TRUE", "1", x)
+              }))
+t3<- data.frame(lapply(t3, function(x) as.numeric(as.character(x))))
+t3$LOFI_gnomAD = rowSums(t3)
+
+cv_m = cbind (cv_m, t3$LOFI_gnomAD)
+
+for(i in 1:nrow(cv_m)){
+if (cv_m[i,23]>0) {
+ cv_m[i,25] = 1  
+} 
+else if  (cv_m[i,23]==0)
+{  cv_m[i,25] = 0} 
+}
+
+for(i in 1:nrow(cv_m)){
+if (cv_m[i,24]>0) {
+ cv_m[i,26] = 1  
+} 
+else if  (cv_m[i,24]==0)
+{  cv_m[i,26] = 0} 
+}
+
+names(cv_m)[25] = "DDG2"
+names(cv_m)[26] = "LOFI_gnomAD"
+cv_m = cv_m [,-c(23,24)]
+names(cv2gen)[2:67]= paste0("gene", 1:(ncol(cv2gen)-1))
+cv_m = cbind(cv_m, cv2gen[,-1])
+cv_m$IID = paste0 (cv_m$FID, "-1")
+cv_fortable = merge(cv_m, phenotypes, by.x="IID", by.y="ID")
+cv_ft1 = subset(cv_fortable, subset=DDG2==1)
+cv_ft2 = subset(cv_fortable, subset=LOFI_gnomAD==1)
+
+DDG_CNV = table (cv_ft1$Transmission.Status, cv_ft1$bin_grade)
+                 colnames(DDG_CNV) = c("High Score", "Low Score")
+                 row.names(DDG_CNV) = c ("D_CNV_DD", "NT_CNV_DD", "T_CNV_DD" )
+
+GNOMAD_CNV = table (cv_ft2$Transmission.Status, cv_ft2$bin_grade)
+                 colnames(GNOMAD_CNV) = c("High Score", "Low Score")
+                 row.names(GNOMAD_CNV) = c ("D_CNV_LOF", "NT_CNV_LOF", "T_CNV_LOF" )
+OVERALL_CNV = rbind (DDG_CNV, GNOMAD_CNV)                 
+                 
+cv_dd = subset (cv_m, subset=cv_m$DDG2==1)
+cv_dd$seq <- ave(cv_dd$Size_bp, cv_dd$IID, FUN = seq_along)
+cv_dd= cv_dd[,c(91,22,92)]
+
+cv_dd= reshape(cv_dd, idvar = "IID", timevar = "seq", direction = "wide")
+cv_dd[is.na(cv_dd)]<-0
+
+cv_dd$D_CNV_DD <- rowSums(cv_dd[,c(2:3)] == "D")
+cv_dd$T_CNV_DD <- rowSums(cv_dd[,c(2:3)] == "T")
+cv_dd$NT_CNV_DD <- rowSums(cv_dd[,c(2:3)] == "NT")
+cv_dd= cv_dd[,c(1,4,5,6)]
+
+cv_lof = subset (cv_m, subset=cv_m$LOFI_gnomAD==1)
+cv_lof$seq <- ave(cv_lof$Size_bp, cv_lof$IID, FUN = seq_along)
+cv_lof= cv_lof[,c(91,22,92)]
+
+cv_lof= reshape(cv_lof, idvar = "IID", timevar = "seq", direction = "wide")
+cv_lof[is.na(cv_lof)]<-0
+
+cv_lof$D_CNV_LOF <- rowSums(cv_lof[,c(2:4)] == "D")
+cv_lof$T_CNV_LOF <- rowSums(cv_lof[,c(2:4)] == "T")
+cv_lof$NT_CNV_LOF <- rowSums(cv_lof[,c(2:4)] == "NT")
+cv_lof= cv_lof[,c(1,5,6,7)]
+
+## output regression counts for final multivariable model
+
+write.table(merge (cv_lof,cv_dd, by="IID", all.x=T, all.y = T), "./../output/CNVs_per_person.dat", col.names=T, row.names=F, quote=F )
+
+phenotypes_cnv = merge(phenotypes, cv_lof, by.x="ID", by.y="IID", all.x=TRUE)
+phenotypes_cnv = merge(phenotypes_cnv, cv_dd, by.x="ID", by.y="IID", all.x=TRUE)
+phenotypes_cnv = subset (phenotypes_cnv, subset = phenotypes_cnv$in_genotyping == 1)
+phenotypes_cnv$D_CNV_DD[is.na(phenotypes_cnv$D_CNV_DD)]<-0
+phenotypes_cnv$D_CNV_LOF  [is.na(phenotypes_cnv$D_CNV_LOF)]<-0
+phenotypes_cnv$T_CNV_DD[is.na(phenotypes_cnv$T_CNV_DD)]<-0
+phenotypes_cnv$T_CNV_LOF  [is.na(phenotypes_cnv$T_CNV_LOF)]<-0
+phenotypes_cnv$NT_CNV_DD[is.na(phenotypes_cnv$NT_CNV_DD)]<-0
+phenotypes_cnv$NT_CNV_LOF[is.na(phenotypes_cnv$NT_CNV_LOF)]<-0
+
+DD0 = NULL
+for (i in 29:34){
+    fat1 = logistf (bin_grade ~ phenotypes_cnv[,i] + sex + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10 , data=phenotypes_cnv, firth=TRUE)
+    OR = exp(fat1$coefficients[2])
+    UPPER = exp(fat1$ci.upper[2])
+    LOWER = exp(fat1$ci.lower[2])
+    P_VAL = fat1$prob[2]
+DD1 = cbind (OR, UPPER)
+DD1 = cbind (DD1, LOWER)
+DD1 = cbind (DD1, P_VAL)
+DD0 = rbind (DD0, DD1)
+    }
+    row.names(DD0) = colnames(phenotypes_cnv[29:34]) 
+
+OVERALL_CNV = merge (OVERALL_CNV, DD0, by= "row.names" )                 
+
+OVERALL_CNV
+```
+Create TDT table for supplement
+
+```{r}
+
+
+cv_ft1= cv_ft1%>% mutate (TYPE_1 = recode (TYPE,
+"1" ="Deletions",
+"3"="Duplications"
+                                           ))
+cv_ft2= cv_ft2%>% mutate (TYPE_1 = recode (TYPE,
+"1" ="Deletions",
+"3"="Duplications"
+                                           ))
+cv_ft1 = subset (cv_ft1, subset=cv_ft1$Transmission.Status!="D")
+tab1 = table (cv_ft1$bin_grade, cv_ft1$Transmission.Status)
+row.names(tab1) = c("All_DD2_High", "All_DD2_low")
+cv_ft1a = subset(cv_ft1, subset=cv_ft1$TYPE_1=="Deletions")
+tab2= table (cv_ft1a$bin_grade, cv_ft1a$Transmission.Status)
+row.names(tab2) = c("Del_DD2_High", "Del_DD2_low")
+cv_ft1b = subset(cv_ft1, subset=cv_ft1$TYPE_1=="Duplications")
+tab3= table (cv_ft1b$bin_grade, cv_ft1b$Transmission.Status)
+row.names(tab3) = c("Dup_DD2_High", "Dup_DD2_low")
+tab1= rbind(tab1,tab2 )
+tab1 = rbind (tab1, tab3)
+
+cv_ft2 = subset (cv_ft2, subset=cv_ft2$Transmission.Status!="D")
+tab_1 = table (cv_ft2$bin_grade, cv_ft2$Transmission.Status)
+row.names(tab_1) = c("All_LOFI_High", "All_LOFI_low")
+cv_ft2a = subset(cv_ft2, subset=cv_ft2$TYPE_1=="Deletions")
+tab_2= table (cv_ft2a$bin_grade, cv_ft2a$Transmission.Status)
+row.names(tab_2) = c("Del_LOFI_High", "Del_LOFI_low")
+cv_ft2b = subset(cv_ft2, subset=cv_ft2$TYPE_1=="Duplications")
+tab_3= table (cv_ft2b$bin_grade, cv_ft2b$Transmission.Status)
+row.names(tab_3) = c("Dup_LOFI_High", "Dup_LOFI_low")
+tab_1= rbind(tab_1,tab_2 )
+tab_1 = rbind (tab_1, tab_3)
+
+tab1= rbind (tab1, tab_1)
+
+tab2 = as.data.frame(tab1)
+tab2$P = NULL
+tab2$RR= NULL
+
+for(i in 1:nrow(tab2)) {
+  # chisq test
+  temp_chisq <- chisq.test(c(tab2$T[i],
+                             tab2$NT[i]))
+  
+  ## add TDT P value
+  tab2$P[i] <- temp_chisq$p.value 
+  # add rate ratio
+  tab2$RR[i] <- tab2$T[i] / tab2$NT[i]
+}
+tab2
+```
+Supplemental analysis for the rest of the CNVs (not containing LoFi Genes)
+
+```{r}
+
+cv_ft3 = subset(cv_fortable, subset=LOFI_gnomAD==0)
+
+noGNOMAD_CNV=  table (cv_ft3$Transmission.Status, cv_ft3$bin_grade)
+                 colnames(noGNOMAD_CNV) = c("High Score", "Low Score")
+                 row.names(noGNOMAD_CNV) = c ("D_CNV_noLOF", "NT_CNV_noLOF", "T_CNV_noLOF" )
+                 
+OVERALL_CNV = rbind (DDG_CNV, GNOMAD_CNV)                 
+OVERALL_CNV = rbind (OVERALL_CNV, noGNOMAD_CNV)                 
+                 
+cv_nolof = subset (cv_m, subset=cv_m$LOFI_gnomAD==0)
+cv_nolof$seq <- ave(cv_nolof$Size_bp, cv_nolof$IID, FUN = seq_along)
+cv_nolof= cv_nolof[,c(91,22,92)]
+
+cv_nolof= reshape(cv_nolof, idvar = "IID", timevar = "seq", direction = "wide")
+cv_nolof[is.na(cv_nolof)]<-0
+
+cv_nolof$D_CNV_noLOF <- rowSums(cv_nolof[,c(2:7)] == "D")
+cv_nolof$T_CNV_noLOF <- rowSums(cv_nolof[,c(2:7)] == "T")
+cv_nolof$NT_CNV_noLOF <- rowSums(cv_nolof[,c(2:7)] == "NT")
+cv_nolof= cv_nolof[,c(1,8,9,10)]
+
+phenotypes_cnv = merge(phenotypes, cv_nolof, by.x="ID", by.y="IID", all.x=TRUE)
+phenotypes_cnv = subset (phenotypes_cnv, subset = phenotypes_cnv$in_genotyping == 1)
+phenotypes_cnv$D_CNV_noLOF[is.na(phenotypes_cnv$D_CNV_noLOF)]<-0
+phenotypes_cnv$T_CNV_noLOF  [is.na(phenotypes_cnv$T_CNV_noLOF)]<-0
+phenotypes_cnv$NT_CNV_noLOF[is.na(phenotypes_cnv$NT_CNV_noLOF)]<-0
+
+
+DD0 = NULL
+for (i in 29:31){
+    fat1 = logistf (bin_grade ~ phenotypes_cnv[,i] + sex + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10 , data=phenotypes_cnv, firth=TRUE)
+    OR = exp(fat1$coefficients[2])
+    UPPER = exp(fat1$ci.upper[2])
+    LOWER = exp(fat1$ci.lower[2])
+    P_VAL = fat1$prob[2]
+DD1 = cbind (OR, UPPER)
+DD1 = cbind (DD1, LOWER)
+DD1 = cbind (DD1, P_VAL)
+DD0 = rbind (DD0, DD1)
+    }
+    row.names(DD0) = colnames(phenotypes_cnv[29:31]) 
+
+OVERALL_CNV = merge (OVERALL_CNV, DD0, by= "row.names" )                 
+
+OVERALL_CNV
+```
+```{r}
+
+
+cv_ft3= cv_ft3%>% mutate (TYPE_1 = recode (TYPE,
+"1" ="Deletions",
+"3"="Duplications"
+
+                                           ))
+cv_ft3 = subset (cv_ft3, subset=cv_ft3$Transmission.Status!="D")
+tab1 = table (cv_ft3$bin_grade, cv_ft3$Transmission.Status)
+row.names(tab1) = c("All_noLOFI_High", "All_noLOFI_low")
+cv_ft3a = subset(cv_ft3, subset=cv_ft3$TYPE_1=="Deletions")
+tab2= table (cv_ft3a$bin_grade, cv_ft3a$Transmission.Status)
+row.names(tab2) = c("Del_noLOFI_High", "Del_noLOFI_low")
+cv_ft3b = subset(cv_ft3, subset=cv_ft3$TYPE_1=="Duplications")
+tab3= table (cv_ft3b$bin_grade, cv_ft3b$Transmission.Status)
+row.names(tab3) = c("Dup_noLOFI_High", "Dup_noLOFI_low")
+tab1= rbind(tab1,tab2 )
+tab1 = rbind (tab1, tab3)
+
+
+tab2 = as.data.frame(tab1)
+tab2$P = NULL
+tab2$RR= NULL
+
+for(i in 1:nrow(tab2)) {
+  # chisq test
+  temp_chisq <- chisq.test(c(tab2$T[i],
+                             tab2$NT[i]))
+  
+  ## add TDT P value
+  tab2$P[i] <- temp_chisq$p.value 
+  # add rate ratio
+  tab2$RR[i] <- tab2$T[i] / tab2$NT[i]
+}
+tab2
+
+
+
+
+```
+
+

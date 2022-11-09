@@ -1,0 +1,378 @@
+---
+title: "NDD weighted DNV analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(logistf)
+library("wesanderson")
+```
+
+```{r}
+## functions ##
+
+run.firths.test <- function(data_in,covars_in,variant_tested) {
+  temp_formular <- as.formula(paste("bin_grade ~", paste(c(variant_tested,covars_in), collapse="+")))
+  temp_logit <- logistf(data = data_in, formula = temp_formular)
+  return(temp_logit)
+}
+
+count_vars <- function(counts) {
+  
+  case_nvars=counts[2]
+  con_nvars=counts[1]
+  
+  result_df = data.frame(Case_N=case_nvars,
+                         Con_N=con_nvars,
+                         stringsAsFactors=FALSE)
+  return(result_df)
+}
+
+extract_firths_results <- function(firth_result,
+                                   var_test,
+                                   test_name) {
+  P <- firth_result$prob[var_test]
+  OR = exp(coef(firth_result))[var_test]
+  OR_lower = exp(firth_result$ci.lower[var_test])
+  OR_upper = exp(firth_result$ci.upper[var_test])
+  coef = firth_result$coefficients[var_test]
+  se=sqrt(diag(vcov(firth_result)))[2]
+  result_df = data.frame(Test=test_name,
+                         P=P,
+                         OR=OR,
+                         OR_lower=OR_lower,
+                         OR_upper=OR_upper,
+                         Beta=coef,
+                         Se=se,
+                         stringsAsFactors=FALSE,
+                         row.names = NULL)
+  
+}
+
+format.firths.test <- function(data_in,
+                               result_in,
+                               variant_tested,
+                          #     sample_info_in,
+                               test_name_in) {
+  temp_logit2 <- extract_firths_results(firth_result = result_in,
+                                        var_test = variant_tested,
+                                        test_name = test_name_in)
+  # temp_logit2 <- cbind(temp_logit2,
+  #                      sample_info_in)
+  
+  temp_logit2 <- cbind(temp_logit2,
+                       count_vars(by(data_in[variant_tested],
+                                     data_in$bin_grade,sum)))
+  return(temp_logit2)
+
+}
+```
+
+
+```{r}
+## load pre-computed de novo data ##
+BG_all <- read.table("./../data/BG_trios_dnvs.tsv", sep = "\t",header = T)
+```
+
+```{r}
+## load trio phenotypes
+final_BG <- read.table("./../output/MasterSet.txt", header = T, sep = " ", quote = "") %>%
+  mutate(bin_grade = ifelse(bin_grade == 1,
+                            0,1))  %>% ## Swap binary coding for rare variant analysis
+  filter(in_sequencing == 1)
+```
+
+## Genes sets 
+
+```{r}
+## load  gene sets 
+
+gene_sets_input <- list(
+  DDG2P = "./../data/DDG2P_15_11_2021.txt",
+  LoFi_gnomad = "./../data/gnomad_pLI_Ensemble.tsv"
+)
+
+
+gene_sets <- lapply(gene_sets_input, function(x){
+  temp_set <- read.table(x,
+                         header = T,
+                         sep = "\t",
+                         quote = "")
+  return(temp_set)
+})
+
+
+## create set for monoallelic confirmed/probable DDD genes
+gene_sets$DDG2P <- gene_sets$DDG2P %>%
+  filter((allelic.requirement == "monoallelic") &
+           DDD.category %in% c("confirmed", "probable"))
+
+
+```
+
+
+```{r}
+## Annotate DNVs for gene set membership
+
+## annotate DDD sets
+BG_all <- BG_all %>%
+  mutate(DDG2P_mono = ifelse(Gene_Name %in% gene_sets$DDG2P$gene.symbol,
+                        1,0)
+         )
+
+
+## annotate PTV constraint 
+BG_all <- BG_all %>%
+  mutate(gnomad_LoFi = ifelse(Gene_Name %in% gene_sets$LoFi_gnomad$gene,
+                              1,0)
+         )
+
+```
+
+## DNV filters 
+
+```{r}
+
+gnomad_filter <- quo((gnomad_genomes_AC.gnomad_genomes_controls_all_AC == 0 | 
+                       is.na(gnomad_genomes_AC.gnomad_genomes_controls_all_AC)) &
+                      (gnomad_exomes_AC.gnomad_exomes_controls_all_AC == 0 | 
+                         is.na(gnomad_exomes_AC.gnomad_exomes_controls_all_AC))
+)
+
+## synonymous 
+## PTVs
+Syn.dnv.filters <- list(
+                    Synonymous = quo(most_severe_consequence == "synonymous_variant")
+)
+
+## PTVs
+PTV.dnv.filters <- list(
+  PTV_CADD_20 = quo(PTV == 1 &
+                      ((CADD_phred >= 20) |
+                         is.na(CADD_phred)))
+                    )
+
+## Missense variants
+Missense.dnv.filters <- list(Missense_CADD_20_MPC1 = 
+                               quo(most_severe_consequence == "missense_variant" & 
+                                     (CADD_phred >=20) &
+                                     MPC_scores.MPC > 1)
+)
+
+gene.set.filters <- list(gnomAD_LoFi = quo(gnomad_LoFi == 1),
+                         DDG2P = quo(DDG2P_mono == 1),
+                         ## Not in set
+                         Non_gnomAD_LoFi = quo(gnomad_LoFi == 0),
+                         Non_DDG2P = quo(DDG2P_mono == 0),
+                         ## gnomAD no NDD
+                         gnomAD_LoFi_nonNDD = quo(gnomad_LoFi == 1 & DDG2P_mono == 0)
+                         )
+
+
+## PTVs + missense filters
+ PTV.Missense.dnv.filters <- list(PTVandMiss_MPC1_CADD_20 = 
+                                    quo((PTV == 1 | 
+                                        (most_severe_consequence == "missense_variant" &
+                                           CADD_phred >= 20 &
+                                           MPC_scores.MPC > 1
+                                         )
+                                        ))
+                    )
+
+##
+ 
+```
+
+
+```{r}
+## merge different variant filters
+all.variant.filter <- as.list(c(PTV.dnv.filters,
+                                Missense.dnv.filters,
+                                Syn.dnv.filters,
+                                PTV.Missense.dnv.filters))
+
+## create filter lists to loop over
+Variant_list_filters <- as.list(names(all.variant.filter))
+names(Variant_list_filters) <- names(all.variant.filter)
+
+geneset_list_filters <- as.list(names(gene.set.filters))
+names(geneset_list_filters) <- names(gene.set.filters)
+
+
+## without gnomAD filters
+proband_var_counts <- 
+  ## loop gene sets
+  lapply(geneset_list_filters, function(g) {
+    ## loop variant filters
+    lapply(Variant_list_filters, function(v) {
+      variable_name <- paste(g,v,sep = "_")
+      temp <- BG_all %>%
+        filter(!!gene.set.filters[[g]] &  !!all.variant.filter[[v]]) %>%
+        group_by(ID) %>% summarise(!!variable_name := n())
+    })
+  })
+
+## with gnomAD filters
+proband_var_counts_gnomAD <- 
+  ## loop gene sets
+  lapply(geneset_list_filters, function(g) {
+    ## loop variant filters
+    lapply(Variant_list_filters, function(v) {
+      variable_name <- paste(g,v,"gnomAD_filter",sep = "_")
+      temp <- BG_all %>%
+        filter(!!gene.set.filters[[g]] & !!all.variant.filter[[v]] & !!gnomad_filter) %>%
+        group_by(ID) %>% summarise(!!variable_name := n())
+    })
+  })
+
+```
+
+```{r}
+final_BG2 <- final_BG #%>%
+  #mutate(EA_binary = ifelse(School.grade <= 4, 1, 0))
+
+for(g in geneset_list_filters) {
+  for (v in Variant_list_filters) {
+    final_BG2 <- final_BG2 %>%
+      left_join(proband_var_counts[[g]][[v]],by = "ID") %>%
+      left_join(proband_var_counts_gnomAD[[g]][[v]],by = "ID")
+  }
+}
+
+final_BG2[,8:length(final_BG2)][is.na(final_BG2[,8:length(final_BG2)])] <- 0
+
+## change -inf
+final_BG2[,8:length(final_BG2)][final_BG2[,8:length(final_BG2)] == -Inf] <- 0
+
+## remove proband_var tables 
+rm(proband_var_counts,
+   proband_var_counts_gnomAD)
+```
+
+
+## Regression tests
+
+```{r}
+## run regressions 
+
+variant_list <- as.list(names(final_BG2[29:length(final_BG2)]))
+names(variant_list) <- names(final_BG2[29:length(final_BG2)])
+
+sets_to_exclude <- final_BG2 %>% 
+  select(contains(c(names(variant_list)))) %>%
+  select_if(~sum(.) < 3)
+
+Firths_result <- lapply(variant_list,function(x){
+  
+  if (sum(final_BG2[[x]]) <= 2) {
+    ignore_test <- TRUE
+    model <- NULL
+  }
+  else{
+   ignore_test <- FALSE 
+   model <- run.firths.test(data_in = final_BG2,
+                  variant_tested = x,
+                  covars_in = "sex")
+  }
+  return(list(ignore_test = ignore_test,
+              model = model)
+  )
+})
+
+
+results_tables <- lapply(variant_list,function(x){
+  if (Firths_result[[x]]$ignore_test == FALSE) {
+    format.firths.test(data_in = final_BG2,
+                     result_in = Firths_result[[x]]$model,
+                     variant_tested = x,
+                     test_name_in = x)
+    
+  }
+  else {
+    
+    temp_df <- data.frame(Test = x,
+                          P = NA,
+                          OR = NA,
+                          OR_lower = NA,
+                          OR_upper = NA,
+                          Beta = NA,
+                          Se = NA)
+
+   temp_counts <- cbind(temp_df,
+                        count_vars(by(final_BG2[x],
+                                      final_BG2$bin_grade,sum)))
+  }
+})
+
+results_tables <- do.call(rbind,
+                          results_tables)
+
+```
+
+## Format results 
+
+```{r}
+## format results
+results_tables[,2:5] <- signif(results_tables[,2:5],3)
+
+results_tables2 <- results_tables %>%
+  mutate(OR2 = paste0(OR, " (",OR_lower,", ",OR_upper, ")"),
+         Low_EA_rate = Case_N/293,
+         High_EA_rate = Con_N/369,
+         Gene_set = ifelse(grepl("DDG2P",Test),"DDG2P",
+                                         ifelse(grepl("gnomAD_LoFi_nonNDD",Test),"gnomAD_LoFi_nonNDD", 
+                                            ifelse(grepl("gnomAD_LoFi",Test),"gnomAD_LoFi", 
+                                             NA))
+                           ),
+         Gene_set_membership = ifelse(grepl("Non_",Test),"FALSE","TRUE"),
+         Variant = ifelse(grepl("PTVandMiss",Test),"PTVandMiss",
+                            ifelse(grepl("_PTV",Test),"PTV",
+                              ifelse(grepl("Missense_",Test),"Missense",
+                                     ifelse(grepl("PTVandMiss",Test),"PTV.Missense",
+                                            ifelse(grepl("_Synonymous_",Test),"Synonymous",
+                                            NA))))),
+         MPC = ifelse(grepl("MPC2",Test),"MPC2",
+                      ifelse(grepl("MPC1",Test),"MPC1",
+                             ifelse(grepl("MPC_le_1",Test),"MPC_le_1",
+                             "."))),
+         CADD = ifelse(grepl("CADD_0_10",Test),"CADD_0_10",
+                      ifelse(grepl("CADD_10_20",Test),"CADD_10_20",
+                             ifelse(grepl("CADD_20",Test),"CADD_20",
+                                    ifelse(grepl("CADD_0_20",Test),"CADD_0_20",
+                             ".")))),
+         gnomAD_filter = ifelse(grepl("_gnomAD_filter",Test),"TRUE","FALSE")
+                      
+                          
+  ) 
+
+```
+
+```{r}
+## output regression results 
+
+write.table(results_tables2 %>%
+  filter(gnomAD_filter == T & Gene_set_membership == T) %>%
+  select(Test, Gene_set, Variant, P, OR2, Case_N,Con_N,Low_EA_rate,High_EA_rate),
+  file = "./../output/EA_DNV_results_formatted_manuscript.tsv",
+            quote = F,sep = "\t",row.names = F)
+
+## output regression counts for final multivariable model
+
+write.table(final_BG2 %>%
+              select(ID, gnomAD_LoFi_PTVandMiss_MPC1_CADD_20_gnomAD_filter, DDG2P_PTVandMiss_MPC1_CADD_20_gnomAD_filter),
+            file = "./../output/DNV_counts_for_multivariable_regression.tsv")
+```
+
+## print NDD variant carriers
+
+```{r}
+write.table(BG_all %>%
+  filter(!!gene.set.filters$DDG2P & !!all.variant.filter$PTVandMiss_MPC1_CADD_20 & !!gnomad_filter) %>%
+  select(2:8,CADD_phred,MPC_scores.MPC),
+  file = "./../output/BG_trios_NDD_DNV_carriers.tsv",sep = "\t",row.names = F,quote = F)
+```
+
