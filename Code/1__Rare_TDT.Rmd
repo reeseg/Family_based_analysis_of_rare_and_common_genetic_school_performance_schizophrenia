@@ -1,0 +1,456 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+## Load packages ####
+
+library(data.table)
+library(tidyverse)
+library(logistf)
+```
+
+```{r}
+## functions ##
+
+run.firths.test <- function(data_in,covars_in,variant_tested) {
+  temp_formular <- as.formula(paste("bin_grade ~", paste(c(variant_tested,covars_in), collapse="+")))
+  temp_logit <- logistf(data = data_in, formula = temp_formular)
+  return(temp_logit)
+}
+
+count_vars <- function(counts) {
+  
+  case_nvars=counts[2]
+  con_nvars=counts[1]
+  
+  result_df = data.frame(Case_N=case_nvars,
+                         Con_N=con_nvars,
+                         stringsAsFactors=FALSE)
+  return(result_df)
+}
+
+extract_firths_results <- function(firth_result,
+                                   var_test,
+                                   test_name) {
+  P <- firth_result$prob[var_test]
+  OR = exp(coef(firth_result))[var_test]
+  OR_lower = exp(firth_result$ci.lower[var_test])
+  OR_upper = exp(firth_result$ci.upper[var_test])
+  coef = firth_result$coefficients[var_test]
+  se=sqrt(diag(vcov(firth_result)))[2]
+  result_df = data.frame(Test=test_name,
+                         P=P,
+                         OR=OR,
+                         OR_lower=OR_lower,
+                         OR_upper=OR_upper,
+                         Beta=coef,
+                         Se=se,
+                         stringsAsFactors=FALSE,
+                         row.names = NULL)
+  
+}
+
+format.firths.test <- function(data_in,
+                               result_in,
+                               variant_tested,
+                          #     sample_info_in,
+                               test_name_in) {
+  temp_logit2 <- extract_firths_results(firth_result = result_in,
+                                        var_test = variant_tested,
+                                        test_name = test_name_in)
+  # temp_logit2 <- cbind(temp_logit2,
+  #                      sample_info_in)
+  
+  temp_logit2 <- cbind(temp_logit2,
+                       count_vars(by(data_in[variant_tested],
+                                     data_in$bin_grade,sum)))
+  return(temp_logit2)
+
+}
+```
+
+```{r}
+#### Load sequencing and phenotype data ####
+
+## Rare transmitted and non-transmitted variants
+Rare_variants <- read.table("./../data/Rare_BG_newFromer_TDT_variants_control_AC_20_full_annotations.tsv", head=T, sep="\t")
+
+## Remove Chr X variants
+Rare_variants <- Rare_variants %>%
+  dplyr::filter(Chr != "X")
+
+## phenotype data 
+phenotypes <- read.table("./../output/MasterSet.txt", header = T, sep = " ", quote = "") %>%
+  mutate(bin_grade = ifelse(bin_grade == 1,
+                            0,1)) ## Swap binary coding for rare variant analysis
+
+```
+
+
+```{r}
+#### Load gene sets ####
+
+## file locations
+gene_sets_input <- list(
+  DDG2P = "./../data/DDG2P_15_11_2021.txt",
+  LoFi_gnomad = "./../data/gnomad_pLI_Ensemble.tsv"
+)
+
+## load sets into list
+gene_sets <- lapply(gene_sets_input, function(x){
+  temp_set <- read.table(x,
+                         header = T,
+                         sep = "\t",
+                         quote = "")
+  return(temp_set)
+})
+
+## create set for monoallelic confirmed/probable DDD genes
+gene_sets$DDG2P <- gene_sets$DDG2P %>%
+  filter((allelic.requirement == "monoallelic") &
+           DDD.category %in% c("confirmed", "probable"))
+
+```
+
+```{r}
+#### Annotate variants ####
+
+## annotate gene set membership (NDD and LoFi genes)
+Rare_variants <- Rare_variants %>%
+  mutate(DDG2P_mono = ifelse(gene_symbol_worstCsq %in% gene_sets$DDG2P$gene.symbol,
+                        1,0),
+         gnomad_LoFi = ifelse(gene_symbol_worstCsq %in% gene_sets$LoFi_gnomad$gene,
+                              1,0)
+         )
+
+Rare_variants <- Rare_variants %>%
+  left_join(phenotypes,by = c("Proband_ID" = "ID")) %>%
+  filter(!is.na(bin_grade)) %>%
+  mutate(bin_grade_label = ifelse(bin_grade == 0,
+                            "High grade",
+                            "Low grade"))
+
+## update T NT coding
+Rare_variants <- Rare_variants %>%
+  mutate(T_NT = ifelse(T_NT == 2,
+                       "T","NT"))
+```
+
+```{r}
+#### Set variant filters ####
+
+## Allele frequency filters
+
+AC.filters <- list(
+  AC1_gnomad_con = quo(combined_AC_gnomad_controls == 1)                 
+)
+
+## PTVs
+PTV.filters <- list(
+  PTV_CADD_20 = quo(most_severe_consequence == "frameshift_variant" |
+                    (most_severe_consequence %in% c("splice_donor_variant","splice_acceptor_variant","stop_gained") & 
+                       CADD_phred >= 20) 
+                    )
+)
+
+
+## Missense variants
+Missense.filters <- list(Missense_CADD_20_MPC1 = 
+                               quo(most_severe_consequence == "missense_variant" & 
+                                     (CADD_phred >=20) &
+                                     MPC_scores.MPC >= 1)
+)
+
+## PTVs + missense filters
+ PTV.Missense.filters <- list(PTVandMiss_MPC1_CADD_20 = 
+                                    quo(
+                                      (most_severe_consequence == "frameshift_variant" |
+                                         (most_severe_consequence %in% c("splice_donor_variant","splice_acceptor_variant","stop_gained") & 
+                                            CADD_phred >= 20)) |
+                                        (most_severe_consequence == "missense_variant" & 
+                                           (CADD_phred >=20) &
+                                           MPC_scores.MPC >= 1
+                                         )
+                                    )
+                              )
+ 
+## gene set filters
+gene.set.filters <- list(gnomAD_LoFi = quo(gnomad_LoFi == 1),
+                         DDG2P = quo(DDG2P_mono == 1),
+                         Non_gnomAD_LoFi  = quo(gnomad_LoFi == 0)
+                         )
+```
+
+```{r}
+## Prepare variant filter lists to loop over ####
+
+## merge different variant filters 
+all.variant.filters <- as.list(c(PTV.filters,
+                                Missense.filters,
+                                PTV.Missense.filters))
+
+## create filter lists to loop over
+AC_list_filters <- as.list(names(AC.filters))
+names(AC_list_filters) <- names(AC.filters)
+
+Variant_list_filters <- as.list(names(all.variant.filters))
+names(Variant_list_filters) <- names(all.variant.filters)
+
+geneset_list_filters <- as.list(names(gene.set.filters))
+names(geneset_list_filters) <- names(gene.set.filters)
+```
+
+## Regression analysis
+
+```{r}
+## loop through allele count, variant and gene set filters and count T and NTs for high and low school grade probands ####
+
+T_NT_regressions <-
+  ## loop AC filters
+  lapply(AC_list_filters, function(AC) {
+    ## loop gene sets
+    lapply(geneset_list_filters, function(g) {
+      ## loop variant filters
+      lapply(Variant_list_filters, function(v) {
+        variable_name <- paste(g,v,sep = "_")
+        temp <- Rare_variants %>%
+          filter(!!gene.set.filters[[g]] & 
+                   !!all.variant.filters[[v]] &
+                   !!AC.filters[[AC]]) %>%
+          group_by(T_NT,Proband_ID) %>% 
+          summarise(!!variable_name := n()) %>%
+          pivot_wider(names_from = T_NT,
+                      values_from = !!variable_name,
+                      names_prefix = paste(variable_name,"_",sep = ""),
+                      values_fill = 0
+                      ) 
+      })
+    })
+  })
+
+```
+
+```{r}
+final_T_NT_regression_table <- phenotypes %>%
+  filter(in_sequencing == 1 & !is.na(bin_grade))
+
+for(AC in AC_list_filters) {
+  for(g in geneset_list_filters) {
+    for (v in Variant_list_filters) {
+      final_T_NT_regression_table <- left_join(final_T_NT_regression_table,
+                                               T_NT_regressions[[AC]][[g]][[v]],by = c("ID" = "Proband_ID"))
+    }
+  }
+}
+
+## relace missing values with zero
+final_T_NT_regression_table[,29:length(final_T_NT_regression_table)][is.na(final_T_NT_regression_table[,29:length(final_T_NT_regression_table)])] <- 0
+
+```
+
+```{r}
+## run regressions 
+
+variant_list <- as.list(names(final_T_NT_regression_table[29:length(final_T_NT_regression_table)]))
+names(variant_list) <- names(final_T_NT_regression_table[29:length(final_T_NT_regression_table)])
+
+sets_to_exclude <- final_T_NT_regression_table %>% 
+  select(contains(c(names(variant_list)))) %>%
+  select_if(~sum(.) < 3)
+
+Firths_result <- lapply(variant_list,function(x){
+  
+  if (sum(final_T_NT_regression_table[[x]]) <= 2) {
+    ignore_test <- TRUE
+    model <- NULL
+  }
+  else{
+   ignore_test <- FALSE 
+   model <- run.firths.test(data_in = final_T_NT_regression_table,
+                  variant_tested = x,
+                  covars_in = c("sex","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10"))
+  }
+  return(list(ignore_test = ignore_test,
+              model = model)
+  )
+})
+
+
+results_tables <- lapply(variant_list,function(x){
+  if (Firths_result[[x]]$ignore_test == FALSE) {
+    format.firths.test(data_in = final_T_NT_regression_table,
+                     result_in = Firths_result[[x]]$model,
+                     variant_tested = x,
+                     test_name_in = x)
+    
+  }
+  else {
+    
+    temp_df <- data.frame(Test = x,
+                          P = NA,
+                          OR = NA,
+                          OR_lower = NA,
+                          OR_upper = NA,
+                          Beta = NA,
+                          Se = NA)
+
+   temp_counts <- cbind(temp_df,
+                        count_vars(by(final_T_NT_regression_table[x],
+                                      final_T_NT_regression_table$bin_grade,sum)))
+  }
+})
+
+results_tables <- do.call(rbind,
+                          results_tables)
+
+```
+
+```{r}
+## format results
+results_tables[,2:5] <- signif(results_tables[,2:5],3)
+
+N_samples <- final_T_NT_regression_table %>%
+  group_by(bin_grade) %>%
+  summarise(Count = n())
+
+results_tables2 <- results_tables %>%
+  mutate(OR2 = paste0(OR, " (",OR_lower,", ",OR_upper, ")"),
+         Low_EA_rate = Case_N/293,
+         High_EA_rate = Con_N/369,
+         Gene_set = ifelse(grepl("DDG2P",Test),"DDG2P",
+                                         ifelse(grepl("gnomAD_LoFi",Test),"gnomAD_LoFi", 
+                                            NA)
+                           ),
+         Variant = ifelse(grepl("PTVandMiss",Test),"PTVandMiss",
+                            ifelse(grepl("_PTV",Test),"PTV",
+                              ifelse(grepl("Missense_",Test),"Missense",
+                                     ifelse(grepl("PTVandMiss",Test),"PTV.Missense",
+                                            ifelse(grepl("_Synonymous_",Test),"Synonymous",
+                                            NA))))),
+         T_NT = ifelse(grepl("_T",Test),"Transmitted",
+                      ifelse(grepl("_NT",Test),"Non_Transmitted",
+                             "."))
+                      
+                          
+  ) 
+
+```
+
+```{r}
+## output regression results table
+
+write.table(results_tables2 %>%
+  select(Test, Gene_set, Variant, P, OR2, Case_N,Con_N,Low_EA_rate,High_EA_rate),
+  file = "./../output/EA_transmitted_non-transmitted_regression_results_formatted.tsv",
+            quote = F,sep = "\t",row.names = F)
+
+## output regression counts for final multivariable model
+
+write.table(final_T_NT_regression_table %>%
+  select(ID,
+         gnomAD_LoFi_Missense_CADD_20_MPC1_T,gnomAD_LoFi_Missense_CADD_20_MPC1_NT,
+         DDG2P_PTVandMiss_MPC1_CADD_20_T,DDG2P_PTVandMiss_MPC1_CADD_20_NT),
+  file = "./../output/Transmitted_non-transmitted_counts_for_multivariable_regression.tsv",quote = F,row.names = F,sep = "\t")
+
+```
+
+
+## TDT analysis
+
+```{r}
+## loop through allele count, variant and gene set filters and count T and NTs for high and low school grade probands ####
+
+count_TDT <-
+  ## loop AC filters
+  lapply(AC_list_filters, function(AC) {
+    ## loop gene sets
+    lapply(geneset_list_filters, function(g) {
+      ## loop variant filters
+      lapply(Variant_list_filters, function(v) {
+        variable_name <- paste(g,v,sep = "_")
+        temp <- Rare_variants %>%
+          filter(!!gene.set.filters[[g]] & 
+                   !!all.variant.filters[[v]] &
+                   !!AC.filters[[AC]]) %>%
+          group_by(T_NT,bin_grade) %>% 
+          summarise(!!variable_name := n()) %>%
+          pivot_wider(names_from = T_NT,values_from = !!variable_name) %>%
+          mutate(Variant = v,
+                 Gene_set = g)
+      })
+    })
+  })
+
+```
+
+```{r}
+## bind all T-NT results in a table ####
+
+final_TDT_table <- data.frame()
+
+for(AC in AC_list_filters) {
+  for(g in geneset_list_filters) {
+    for (v in Variant_list_filters) {
+      final_TDT_table <- rbind(final_TDT_table,
+                               count_TDT[[AC]][[g]][[v]])
+    }
+  }
+}
+
+## add P values and Rate ratios
+final_TDT_table$P <- NA
+final_TDT_table$RR <- NA
+
+for(i in 1:nrow(final_TDT_table)) {
+  # chisq test
+  temp_chisq <- chisq.test(c(final_TDT_table$T[i],
+                             final_TDT_table$NT[i]))
+  
+  ## add TDT P value
+  final_TDT_table$P[i] <- temp_chisq$p.value 
+  # add rate ratio
+  final_TDT_table$RR[i] <- final_TDT_table$T[i] / final_TDT_table$NT[i]
+}
+
+rm(temp_chisq)
+```
+
+```{r}
+## prepare table for manuscript ####
+
+## reorder columns and keep key variant types
+manuscript_TDT_table <- final_TDT_table %>%
+  select(Gene_set,Variant,bin_grade,T,NT,RR,P)
+
+## change P and RR significant figures
+manuscript_TDT_table[,6] <- signif(manuscript_TDT_table[,6] ,3)
+manuscript_TDT_table[,7] <- signif(manuscript_TDT_table[,7] ,2)
+
+## Write results to disk
+write.table(manuscript_TDT_table,
+            file = "./../output/SM_table_TDT_results_rareCodingVariants.tsv",
+            quote = F,sep = "\t",row.names = F)
+```
+
+
+## T, NT, regression results 
+
+```{r}
+results_tables2
+```
+
+## TDT results
+
+```{r}
+manuscript_TDT_table
+```
+
+
+
+
+
+
