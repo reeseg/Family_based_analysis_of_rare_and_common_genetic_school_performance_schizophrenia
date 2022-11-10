@@ -3,6 +3,8 @@ title: "CNV_Analysis"
 output:
   html_document:
     df_print: paged
+author:
+    Alexandros Rammos, Cardiff University
 ---
 
 Load CNV and phenotype data
@@ -14,12 +16,12 @@ library(data.table)
 library(logistf)
 
 
-#CNV Data 
-
+ 
+#Load CNV Dataset
 cv_m=read.table("./../data/CNV_dataset3.txt", head=T, sep="\t")
 cv_m = subset(cv_m, subset=cv_m$Transmission.Status!="")
 
-## phenotype data 
+## Load phenotype data 
 phenotypes <- read.table("./../output/MasterSet.txt", header = T, sep = " ", quote = "") %>%
   mutate(bin_grade = ifelse(bin_grade == 1,
                             0,1)) ## Swap binary coding for CNV analysis

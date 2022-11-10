@@ -3,6 +3,9 @@ title: "Final_Regression_Models"
 output:
   html_document:
     df_print: paged
+author:
+    Alexandros Rammos, Cardiff University
+
 ---
 
 Load packages and read-in phenotypes and all relevant files from previous scripts, merging the datasets and limiting sample to individuals with Sequencing or Genotyping data
@@ -29,6 +32,7 @@ final_df$T_CNV_LOF[is.na(final_df$T_CNV_LOF)]<-0
 ```
 
 Run regression models, with only significant components in DDG2P 
+
 ```{r}
 
 

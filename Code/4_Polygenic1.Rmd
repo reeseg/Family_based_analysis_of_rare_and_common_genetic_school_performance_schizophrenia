@@ -3,6 +3,9 @@ title: "Common Variant Analysis"
 output:
   html_document:
     df_print: paged
+author:
+    Alexandros Rammos, Cardiff University
+    
 ---
 
 ```{r}
@@ -14,7 +17,7 @@ mypal <- wes_palette("Darjeeling1")
 
 ```
 
-Read in the scores generated in Plink and manipulate them into 1 line/proband
+Read in the scores generated in Plink from the sample, manipulating them into 1 line/proband
 
 ```{r}
 pc1 = read.table ("./../data/EA_Trios.all.score", head=T)
@@ -103,7 +106,7 @@ scores = merge (scores, sz1, by="ID")
 scores = scores [,-c(3,9,15,29,30,35,36,41,42,56,57,62,63,68,69)] 
 rm(ea1, iq1, sz1)
 ```
-standardize the polygenic scores 
+Standardize the polygenic scores 
 
 ```{r}
 scores <- scores %>% 
@@ -115,7 +118,7 @@ write.table(scores, "./../output/scores.dat", col.names=T, row.names=F, quote=F,
 ```
 
 
-Merge with the master phenotype
+Merge with the master Phenotype file
 
 ```{r}
 master1 = fread("./../output/MasterSet.txt")
@@ -208,7 +211,7 @@ plot1 +
         )
 ```
 
-Create Alternate Plot for the manuscript (with parental scores added in)
+Create Alternate Plot for the Supplement (with parental scores added in)
 
 ```{r}
 master1 <- master1 %>% 
