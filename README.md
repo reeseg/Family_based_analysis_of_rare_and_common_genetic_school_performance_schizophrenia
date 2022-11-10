@@ -1,9 +1,8 @@
-# Family Based Analysis Of Rare And Common Genetic School Performance Schizophrenia
-
+# Family Based Analysis Of Rare And Common Genetic Variants and School Performance in Schizophrenia
 
 
 ## Description
-These are the scripts, data and outputs for the research work that looked into the Educational Attainment in a sample of Bulgarian trios (Kirov et al, 2012). To replicate the analysis run the scripts in the "code" folder, with the appropriate data files.
+These are the scripts used for the research presented in Rammos et al, "Family-based analysis of the contribution of rare and common genetic variants to school performance in schizophrenia". 
 
 
 ## Authors and acknowledgment
