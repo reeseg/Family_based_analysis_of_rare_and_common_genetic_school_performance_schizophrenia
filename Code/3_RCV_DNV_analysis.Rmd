@@ -1,8 +1,10 @@
 ---
-title: "NDD weighted DNV analysis"
+title: "Analysis of de novo coding variants"
 output:
   html_document:
     df_print: paged
+author:
+  - Elliott Rees, Cardiff University
 ---
 
 ```{r}
