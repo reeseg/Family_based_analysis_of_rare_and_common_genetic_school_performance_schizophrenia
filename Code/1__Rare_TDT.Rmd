@@ -1,8 +1,10 @@
 ---
-title: "R Notebook"
+title: "Analysis of transmitted and non-transmitted rare coding variants"
 output:
   html_document:
     df_print: paged
+author:
+  - Elliott Rees, Cardiff University
 ---
 
 ```{r}
